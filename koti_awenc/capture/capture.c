@@ -268,6 +268,9 @@ void DeInitCapture() {
 	}
 
 	if (mCamFd != 0) {
+        // For ctrl cameraled.
+        //get_capture_brightness(0); //// sunxi_csi0 driver builtin instead.(2014/10/17 by xshl5)
+
 		close(mCamFd);
 		mCamFd = 0;
 	}
@@ -382,5 +385,18 @@ int GetPreviewFrame(V4L2BUF_t *pBuf) // DQ buffer for preview or encoder
 	//printf("VIDIOC_DQBUF id: %d\n", buf.index);
 
 	return 0;
+}
+
+// get_capture_brightness, for ctrl cameraled in driver layer
+int get_capture_brightness(int qctrl_id)
+{
+    struct v4l2_queryctrl qctrl;
+
+    qctrl.id = 1;
+    if(qctrl_id == 0)
+        qctrl.id = 0;
+
+    ioctl(mCamFd, VIDIOC_QUERYCTRL, &qctrl);
+    return 0;
 }
 

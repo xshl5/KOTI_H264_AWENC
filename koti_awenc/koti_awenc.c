@@ -223,6 +223,51 @@ int get_bitstream_for_save(cache_data *save_bit_stream, char * tem_data, int *da
 	return 0;
 }
 
+int update_bitstream_to_cache_v2(cache_data *save_bit_stream, char *output_data, int data_size)
+{
+	pthread_mutex_lock(&save_bit_stream->mut_save_bs);
+
+	if(save_bit_stream->size < data_size)
+	{
+		pthread_mutex_unlock(&save_bit_stream->mut_save_bs);
+		return -1;
+	}
+
+	if((save_bit_stream->write_offset + data_size) >= save_bit_stream->size)
+	{
+		memcpy(save_bit_stream->data, output_data, data_size);
+		save_bit_stream->write_offset = data_size;
+	}
+	else
+	{
+		memcpy(save_bit_stream->data + save_bit_stream->write_offset, output_data, data_size);
+		save_bit_stream->write_offset = save_bit_stream->write_offset + data_size;
+	}
+
+	pthread_mutex_unlock(&save_bit_stream->mut_save_bs);
+	
+	return 0;
+}
+
+int get_bitstream_for_save_v2(cache_data *save_bit_stream, char * tem_data, int *datasize)
+{
+	pthread_mutex_lock(&save_bit_stream->mut_save_bs);
+	if(save_bit_stream->write_offset > 0)
+	{
+		memcpy(tem_data, save_bit_stream->data, save_bit_stream->write_offset);
+		*datasize = save_bit_stream->write_offset;
+
+		save_bit_stream->write_offset = 0;
+	}
+	else
+	{
+		*datasize = 0;
+	}
+	
+	pthread_mutex_unlock(&save_bit_stream->mut_save_bs);
+	return 0;
+}
+
 int save_left_bitstream(cache_data *save_bit_stream, char * tem_data, int *datasize)
 {
 	int offset;
@@ -266,8 +311,8 @@ int save_left_bitstream(cache_data *save_bit_stream, char * tem_data, int *datas
 
 
 
-
-
+#define video_quality_setting_path "/kotidata/video_quality"
+static int koti_enc_fmt_qp_min = 30;
 VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate)
 {
 	int ret = -1;
@@ -290,19 +335,19 @@ VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate)
     enc_fmt.src_height = height;
 	enc_fmt.width = width;
 	enc_fmt.height = height;
-    enc_fmt.frame_rate = 25 * 1000;
+    enc_fmt.frame_rate = 15 * 1000;
 	enc_fmt.color_format = PIXEL_YUV420;
 	enc_fmt.color_space = BT601;
-	enc_fmt.qp_max = 40;
-	enc_fmt.qp_min = 20;
+    enc_fmt.qp_max = 50;
+    enc_fmt.qp_min = koti_enc_fmt_qp_min;// 30;
 	enc_fmt.avg_bit_rate = avg_bit_rate;
-	enc_fmt.maxKeyInterval = 8;
+    enc_fmt.maxKeyInterval = 30;
 	
     //enc_fmt.profileIdc = 77; /* main profile */
 
     enc_fmt.orientation = 90;
-	enc_fmt.profileIdc = 66; /* baseline profile */
-	enc_fmt.levelIdc = 31;
+    enc_fmt.profileIdc = 66;//66; /* baseline profile */
+    enc_fmt.levelIdc = 20;//31;
 
 	pCedarV->IoCtrl(pCedarV, VENC_SET_ENC_INFO_CMD, &enc_fmt);
 
@@ -331,7 +376,7 @@ void CedarvEncExit(VENC_DEVICE *pCedarV)
 
 void *thread_camera()
 {
-	int ret = -1;
+    int ret = -1;
 	V4L2BUF_t Buf;
 
 	while(1)
@@ -366,6 +411,8 @@ void *thread_camera()
 			printf("GetPreviewFrame failed\n");
 
 		}
+        // For ctrl cameraled.
+        //get_capture_brightness(1); //// sunxi_csi0 driver builtin instead.(2014/10/17 by xshl5)
 
 		pthread_mutex_lock(&mut_cam_buf);
 
@@ -445,7 +492,7 @@ void *thread_enc()
 		if (ret != 0)
 		{
 			/* camera frame buffer is empty */
-			usleep(10*1000);
+			usleep(1000);
 			continue;
 		}
 	
@@ -489,13 +536,13 @@ void *thread_enc()
 				/* save bitstream to cache buffer */
 				if (data_info.uSize0 != 0)
 				{
-					update_bitstream_to_cache(save_bit_stream, data_info.pData0, data_info.uSize0);
+					update_bitstream_to_cache_v2(save_bit_stream, data_info.pData0, data_info.uSize0);
 				}
 				
 				
 				if (data_info.uSize1 != 0)
 				{
-					update_bitstream_to_cache(save_bit_stream, data_info.pData1, data_info.uSize1);
+					update_bitstream_to_cache_v2(save_bit_stream, data_info.pData1, data_info.uSize1);
 
 				}
 
@@ -515,6 +562,11 @@ void *thread_enc()
 int koti_awenc_init(__u32 width, __u32 height, __u32 avg_bit_rate)
 {
 	int ret = -1;
+
+    // for koti_enc_fmt_qp_min setting 
+    FILE* fp = NULL;
+    char tmp_buf[16] = {0};
+
 	/* init video engine */
     ret = cedarx_hardware_init(0);
     if (ret < 0)
@@ -535,6 +587,15 @@ int koti_awenc_init(__u32 width, __u32 height, __u32 avg_bit_rate)
         goto exit;
     }
 
+    /** for koti_enc_fmt_qp_min setting **/
+    if( (fp = fopen(video_quality_setting_path, "r")) )
+    {
+        if(fgets(tmp_buf, 16, fp))
+            koti_enc_fmt_qp_min = atoi(tmp_buf);
+
+        fclose(fp);
+    }
+
     /* init  encoder */
     g_pCedarV = CedarvEncInit(width, height, avg_bit_rate);
 
@@ -542,7 +603,7 @@ int koti_awenc_init(__u32 width, __u32 height, __u32 avg_bit_rate)
     cedarv_set_ve_freq(320);
 
 
-    save_bit_stream = save_bitstream_int(avg_bit_rate>>5/*4*1024*/);
+    save_bit_stream = save_bitstream_int((avg_bit_rate>>4)/*128*1024*/);
     if (save_bit_stream == NULL)
     {
         DeInitCapture();
@@ -594,7 +655,7 @@ int koti_awenc_start()
 
 int koti_awenc_get_bitstream(char* data_buf, int* data_size)
 {
-	get_bitstream_for_save(save_bit_stream, data_buf, data_size);
+	get_bitstream_for_save_v2(save_bit_stream, data_buf, data_size);
 
 //	save_left_bitstream(save_bit_stream, tem_data, &data_size);
 	return *data_size;

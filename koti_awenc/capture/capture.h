@@ -24,6 +24,7 @@ int StartStreaming();
 void ReleaseFrame(int buf_id);
 int WaitCamerReady();
 int GetPreviewFrame(V4L2BUF_t *pBuf);
+int get_capture_brightness(int qctrl_id);
 
 
 #endif // __CAPTURE__H__
